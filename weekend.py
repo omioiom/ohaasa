@@ -394,9 +394,12 @@ def main():
     kst_now = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
     today_str = kst_now.strftime("%Y%m%d")
 
-    # 1. 요일 확인 (토=5, 일=6 인 경우만 실행)
+    # 1. 요일 및 시간 확인 (한국시간 토/일, 오전 5~11시만 실행)
     if kst_now.weekday() not in [5, 6]:
-        print(f"오늘은 {kst_now.strftime('%A')}이므로 주말용 스크립트를 종료합니다.")
+        print(f"오늘은 한국시간 토/일이 아니므로 종료합니다. (요일: {kst_now.weekday()})")
+        return
+    if not (5 <= kst_now.hour < 11):
+        print(f"한국시간 오전 5~11시가 아니므로 종료합니다. (현재: {kst_now.hour}시)")
         return
 
     # 2. 업로드 여부 확인 (중복 방지)
