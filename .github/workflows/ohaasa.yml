@@ -26,7 +26,7 @@ jobs:
           pip install requests Pillow
 
       - name: Run script
-        run: python your_script_name.py # 파이썬 파일명으로 수정하세요
+        run: python weekday.py
 
       - name: Commit success status
         run: |
