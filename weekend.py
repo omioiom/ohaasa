@@ -1,3 +1,50 @@
+def post_to_instagram_reels(video_path, caption):
+    print(f"인스타그램 릴스 업로드 시작: {video_path}")
+    upload_url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/media"
+    publish_url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/media_publish"
+    # 릴스 업로드는 video_url 방식 사용
+    # 먼저 catbox에 업로드
+    video_url = upload_to_catbox(video_path)
+    if not video_url:
+        print("릴스 영상 catbox 업로드 실패")
+        return False
+    # Instagram 컨테이너 생성
+    res = requests.post(upload_url, data={
+        "media_type": "REELS",
+        "video_url": video_url,
+        "caption": caption,
+        "access_token": INSTAGRAM_ACCESS_TOKEN
+    }).json()
+    if "id" in res:
+        creation_id = res["id"]
+        print(f"릴스 컨테이너 생성 완료(ID: {creation_id})")
+        # 컨테이너 준비 상태 polling (최대 60초)
+        for i in range(12):
+            time.sleep(5)
+            status_url = f"https://graph.facebook.com/v18.0/{creation_id}?fields=status_code&access_token={INSTAGRAM_ACCESS_TOKEN}"
+            status_res = requests.get(status_url).json()
+            status_code = status_res.get("status_code", "")
+            print(f"릴스 컨테이너 상태: {status_code}")
+            if status_code == "FINISHED":
+                publish_res = requests.post(publish_url, data={
+                    "creation_id": creation_id,
+                    "access_token": INSTAGRAM_ACCESS_TOKEN
+                }).json()
+                if "id" in publish_res:
+                    print(f"🎉 릴스 포스팅 성공! ID: {publish_res['id']}")
+                    return True
+                else:
+                    print(f"❌ 릴스 최종 발행 실패: {publish_res}")
+                break
+            elif status_code == "ERROR":
+                print(f"❌ 릴스 컨테이너 오류: {status_res}")
+                break
+        else:
+            print("❌ 릴스 컨테이너 준비 시간 초과")
+    else:
+        print(f"❌ 릴스 컨테이너 생성 실패: {res}")
+    return False
+import cv2
 import requests
 import json
 import os
@@ -393,8 +440,62 @@ def run_full_process(data):
 
     if public_urls:
         caption = f"🔮 {date_display} 오늘의 별자리 운세\n\nTV 아사히 '굿모닝'에서 제공하는 오늘의 운세 순위를 확인해보세요!\n\n#오하아사 #오늘의운세 #별자리운세 #운세 #일본운세"
-        return post_to_instagram(public_urls, caption)
-    return False
+
+    # OpenCV로 영상 생성 함수
+    import subprocess
+    def make_video_from_images_cv2(image_paths, video_path):
+        if not image_paths:
+            print("이미지 없음, 영상 생성 스킵")
+            return None
+        first_img = cv2.imread(image_paths[0])
+        height, width, _ = first_img.shape
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(video_path, fourcc, 24, (width, height))
+        for idx, img_path in enumerate(image_paths):
+            duration = 2 if idx == 0 else 4
+            frame = cv2.imread(img_path)
+            for _ in range(duration * 24):
+                out.write(frame)
+        out.release()
+        print(f"영상 생성 완료: {video_path}")
+        return video_path
+
+    # 영상 생성 실행
+    video_path = os.path.join(output_dir, f"ohaasa_{date_str}.mp4")
+    make_video_from_images_cv2(image_paths, video_path)
+
+    # === 배경음악 합성 (ffmpeg 필요) ===
+    import glob
+    mp3_files = glob.glob(os.path.join("asset", "mp3", "m*.mp3"))
+    if mp3_files:
+        bgm_path = random.choice(mp3_files)
+        print(f"랜덤 배경음악 선택: {bgm_path}")
+        video_with_bgm = os.path.join(output_dir, f"ohaasa_{date_str}_bgm.mp4")
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-i", bgm_path,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-shortest",
+            video_with_bgm
+        ]
+        try:
+            subprocess.run(cmd, check=True)
+            print(f"배경음악 합성 완료: {video_with_bgm}")
+        except Exception as e:
+            print(f"ffmpeg 합성 실패: {e}")
+        # 릴스 업로드
+        caption = f"🔮 {date_str[:4]}.{date_str[4:6]}.{date_str[6:]} 오하아사 별자리 운세\n오늘의 운세 순위를 영상으로 확인하세요! #오하아사 #오늘의운세 #별자리운세 #운세 #릴스"
+        success = post_to_instagram_reels(video_with_bgm, caption)
+        if success:
+            with open("last_upload_weekend.txt", "w") as f:
+                f.write(date_str)
+            print(f"🎉 {date_str} 릴스 업로드 완료.")
+    else:
+        print("mp3 파일 없음: asset/mp3/m*.mp3")
+
+    return post_to_instagram(public_urls, caption) if public_urls else False
 
 def main():
     # 한국 시간 기준 계산

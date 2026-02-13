@@ -265,6 +265,52 @@ def upload_to_catbox(file_path):
         return None
 
 def post_to_instagram(image_urls, caption):
+    def post_to_instagram_reels(video_path, caption):
+        print(f"인스타그램 릴스 업로드 시작: {video_path}")
+        upload_url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/media"
+        publish_url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/media_publish"
+        # 릴스 업로드는 video_url 방식 사용
+        # 먼저 catbox에 업로드
+        video_url = upload_to_catbox(video_path)
+        if not video_url:
+            print("릴스 영상 catbox 업로드 실패")
+            return False
+        # Instagram 컨테이너 생성
+        res = requests.post(upload_url, data={
+            "media_type": "REELS",
+            "video_url": video_url,
+            "caption": caption,
+            "access_token": INSTAGRAM_ACCESS_TOKEN
+        }).json()
+        if "id" in res:
+            creation_id = res["id"]
+            print(f"릴스 컨테이너 생성 완료(ID: {creation_id})")
+            # 컨테이너 준비 상태 polling (최대 60초)
+            for i in range(12):
+                time.sleep(5)
+                status_url = f"https://graph.facebook.com/v18.0/{creation_id}?fields=status_code&access_token={INSTAGRAM_ACCESS_TOKEN}"
+                status_res = requests.get(status_url).json()
+                status_code = status_res.get("status_code", "")
+                print(f"릴스 컨테이너 상태: {status_code}")
+                if status_code == "FINISHED":
+                    publish_res = requests.post(publish_url, data={
+                        "creation_id": creation_id,
+                        "access_token": INSTAGRAM_ACCESS_TOKEN
+                    }).json()
+                    if "id" in publish_res:
+                        print(f"🎉 릴스 포스팅 성공! ID: {publish_res['id']}")
+                        return True
+                    else:
+                        print(f"❌ 릴스 최종 발행 실패: {publish_res}")
+                    break
+                elif status_code == "ERROR":
+                    print(f"❌ 릴스 컨테이너 오류: {status_res}")
+                    break
+            else:
+                print("❌ 릴스 컨테이너 준비 시간 초과")
+        else:
+            print(f"❌ 릴스 컨테이너 생성 실패: {res}")
+        return False
     print(f"인스타그램 업로드 프로세스 시작 (이미지 {len(image_urls)}장)...")
     container_ids = []
     for i, url in enumerate(image_urls):
@@ -347,6 +393,7 @@ def main():
                 'content_sm': get_font(reg_p, 30), 'lucky_sm': get_font(bold_p, 36)
             }
 
+
             image_paths = []
 
             # 요약 이미지 생성
@@ -355,12 +402,10 @@ def main():
             draw_s = ImageDraw.Draw(img_s)
             draw_s.rectangle([0, 0, IMG_W, 250], fill=BG_HEADER)
             draw_centered(draw_s, "OHAASA FORTUNE", fonts['brand'], 55, TEXT_LIGHT)
-            
             # 타이틀 설정
             title_text = f"{int(target_date[4:6])}/{int(target_date[6:8])} 오하아사"
             draw_centered(draw_s, title_text, fonts['title'], 100, TEXT_DARK)
             draw_centered(draw_s, date_display, fonts['date'], 190, TEXT_MID)
-            
             COL_RANK_END, COL_ICON_CENTER, COL_SIGN_START = 400, 485, 560
             y_cur, ROW_H = 280, 82
             for item in results:
@@ -376,7 +421,6 @@ def main():
                 draw_s.text((COL_SIGN_START, center_y - 25), item['sign'], fill=TEXT_DARK, font=fonts['sign_sm'])
                 draw_s.line([(180, y_cur + ROW_H), (IMG_W - 180, y_cur + ROW_H)], fill=LINE, width=1)
                 y_cur += ROW_H
-            
             path_s = os.path.join(output_dir, "00_summary.png")
             img_s.save(path_s); image_paths.append(path_s)
 
@@ -399,6 +443,62 @@ def main():
                 draw_centered(draw, "FOR YOUR LUCKY DAY", fonts['brand'], IMG_H - 65, TEXT_LIGHT)
                 path_d = os.path.join(output_dir, f"detail_{i//2 + 1}.png")
                 img.save(path_d); image_paths.append(path_d)
+
+            # === 영상 생성 (OpenCV) ===
+            try:
+                import cv2
+                import subprocess
+                def make_video_from_images_cv2(image_paths, video_path):
+                    if not image_paths:
+                        print("이미지 없음, 영상 생성 스킵")
+                        return None
+                    first_img = cv2.imread(image_paths[0])
+                    height, width, _ = first_img.shape
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    out = cv2.VideoWriter(video_path, fourcc, 24, (width, height))
+                    for idx, img_path in enumerate(image_paths):
+                        duration = 2 if idx == 0 else 4
+                        frame = cv2.imread(img_path)
+                        for _ in range(duration * 24):
+                            out.write(frame)
+                    out.release()
+                    print(f"영상 생성 완료: {video_path}")
+                    return video_path
+                video_path = os.path.join(output_dir, f"ohaasa_{target_date}.mp4")
+                make_video_from_images_cv2(image_paths, video_path)
+
+                # === 배경음악 합성 (ffmpeg 필요) ===
+                import glob
+                mp3_files = glob.glob(os.path.join("asset", "mp3", "m*.mp3"))
+                if mp3_files:
+                    bgm_path = random.choice(mp3_files)
+                    print(f"랜덤 배경음악 선택: {bgm_path}")
+                    video_with_bgm = os.path.join(output_dir, f"ohaasa_{target_date}_bgm.mp4")
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-i", video_path,
+                        "-i", bgm_path,
+                        "-c:v", "copy",
+                        "-c:a", "aac",
+                        "-shortest",
+                        video_with_bgm
+                    ]
+                    try:
+                        subprocess.run(cmd, check=True)
+                        print(f"배경음악 합성 완료: {video_with_bgm}")
+                    except Exception as e:
+                        print(f"ffmpeg 합성 실패: {e}")
+                    # 릴스 업로드
+                    caption = f"🔮 {date_display} 오하아사 별자리 운세\n오늘의 운세 순위를 영상으로 확인하세요! #오하아사 #오늘의운세 #별자리운세 #운세 #별자리"
+                    success = post_to_instagram_reels(video_with_bgm, caption)
+                    if success:
+                        with open("last_upload.txt", "w") as f:
+                            f.write(today_str)
+                        print(f"🎉 {today_str} 릴스 업로드 완료.")
+                else:
+                    print("mp3 파일 없음: asset/mp3/m*.mp3")
+            except Exception as e:
+                print(f"영상 생성 실패: {e}")
 
             # 호스팅 및 업로드
             public_urls = []
