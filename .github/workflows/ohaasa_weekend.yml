@@ -1,0 +1,39 @@
+name: Ohaasa Weekend Instagram Uploader
+
+on:
+  schedule:
+    # 한국 시간 토~일 오전 05:05 ~ 11:05 (UTC 기준 금~일)
+    # 20:05~23:59 UTC (금,토) -> 05:05~08:59 KST (토,일)
+    - cron: '5/20 20-23 * * 5,6'
+    # 00:00~02:05 UTC (토,일) -> 09:00~11:05 KST (토,일)
+    - cron: '5/20 0-2 * * 6,0'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install requests Pillow beautifulsoup4
+
+      - name: Run script
+        run: python weekend.py
+
+      - name: Commit success status
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          if [ -f last_upload_weekend.txt ]; then
+            git add last_upload_weekend.txt
+            git commit -m "Update weekend upload status" || echo "No changes"
+            git push
+          fi
