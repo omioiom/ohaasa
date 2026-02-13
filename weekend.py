@@ -22,7 +22,7 @@ INSTAGRAM_ACCOUNT_ID = "17841449814829956"
 SIGN_MAP_JP = {
     "おひつじ座": "양자리", "おうし座": "황소자리", "ふたご座": "쌍둥이자리", "かに座": "게자리",
     "しし座": "사자자리", "おとめ座": "처녀자리", "てんびん座": "천칭자리", "さそり座": "전갈자리",
-    "いて座": "사수자리", "やぎ座": "염소자리", "みず가め座": "물병자리", "うお座": "물고기자리"
+    "いて座": "사수자리", "やぎ座": "염소자리", "みずがめ座": "물병자리", "うお座": "물고기자리"
 }
 
 SIGN_ASSET_MAP = {
@@ -120,9 +120,16 @@ def fetch_and_translate_ohaasa():
 
         final_results = []
         for item in translated_list:
+            # sign 필드가 일본어로 올 수도 있고, 번역 결과로 올 수도 있음. 모두 매핑 시도
+            sign_jp = item.get('sign_jp') or item.get('sign') or item.get('st') or ''
+            sign_kr = SIGN_MAP_JP.get(sign_jp, sign_jp)
+            # 혹시 번역 결과가 한글로 잘 들어왔으면 그대로 사용
+            if sign_kr not in SIGN_ASSET_MAP:
+                # 번역 결과가 한글로 들어온 경우도 체크
+                sign_kr = item.get('sign', sign_kr)
             final_results.append({
                 "rank": item['rank'],
-                "sign": SIGN_MAP_JP.get(item['sign_jp'], item['sign_jp']),
+                "sign": sign_kr,
                 "content": item['content'],
                 "luck_item": item['luck']
             })
