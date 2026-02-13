@@ -4,8 +4,7 @@ name: Ohaasa Instagram Uploader
 on:
   schedule:
     # 20분마다 실행 (UTC 기준 20:05 ~ 02:05는 한국 시간 05:05 ~ 11:05)
-    - cron: '*/5 20-23 * * 1-5' # 월~금(KST 기준) 오전 05:00~08:59
-    - cron: '*/5 0-2 * * 1-5'   # 월~금(KST 기준) 오전 09:00~11:59
+    - cron: '*/5 * * * *' # 5분마다 실행
   workflow_dispatch: # 수동 실행 버튼 추가
 
 jobs:
