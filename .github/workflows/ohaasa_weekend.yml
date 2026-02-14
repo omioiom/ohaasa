@@ -4,7 +4,7 @@ name: Ohaasa Weekend Instagram Uploader
 on:
   schedule:
     # 5분마다 실행 (설명과 일치하도록 설정 유지)
-    - cron: '*/5 * * * *' 
+    - cron: '*/10 * * * *' 
   workflow_dispatch:
 
 jobs:
