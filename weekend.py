@@ -10,14 +10,16 @@ import time
 import sys
 import glob
 import subprocess
+import base64
 from bs4 import BeautifulSoup
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 # ==========================================
-# [설정] 인스타그램 설정
+# [설정] 인스타그램 설정 및 API 키
 # ==========================================
 INSTAGRAM_ACCESS_TOKEN = "EAAd6uwZBluwsBQraZBXkNCmgfib8ZB5gEPYOv5OIGuX1ZC6cSUTY5X2HI93XydyaEZCq99tjBuPURHOlc9DybydWoZCV7A8ZCeHuAWaI4lVnfRCximXPKF8VYmiGfgH0y5hGPV6tq28DoZCaZBHqsKuONZAy8CFD7D28JdnlkiGCKjb4uoOj8f0h372yqVezBv"
 INSTAGRAM_ACCOUNT_ID = "17841449814829956"
+IMGBB_API_KEY = "4b8f860f3d842b4f48a0d371fff6845d"
 
 # ==========================================
 # [공통] 매핑 테이블 및 디자인 설정
@@ -54,12 +56,46 @@ RANK_BRONZE  = (178, 136, 108)
 RANK_BASE    = (185, 177, 162)
 
 # ==========================================
-# [수정] 업로드 기능 (재시도 및 대체 서버 로직 추가)
+# [수정] 업로드 기능 (이미지: ImgBB / 영상: Litterbox 최적화)
 # ==========================================
 def upload_to_catbox(file_path):
-    """Catbox 업로드를 시도하고 실패 시 3회 재시도하며, 최종 실패 시 file.io를 사용합니다."""
-    # 1. Catbox.moe 시도 (최대 3회)
+    """이미지는 ImgBB, 영상은 고속 Litterbox를 최우선으로 시도합니다."""
+    ext = os.path.splitext(file_path)[1].lower()
+    is_video = ext == '.mp4'
+
+    # 1. 이미지라면 ImgBB 시도 (최우선)
+    if not is_video:
+        try:
+            url = "https://api.imgbb.com/1/upload"
+            with open(file_path, "rb") as f:
+                payload = {"key": IMGBB_API_KEY, "image": base64.b64encode(f.read())}
+                response = requests.post(url, data=payload, timeout=60)
+            if response.status_code == 200:
+                link = response.json().get("data", {}).get("url")
+                if link:
+                    print(f"  [ImgBB] 성공: {file_path} -> {link}")
+                    return link
+        except Exception as e:
+            print(f"  [ImgBB] 시도 실패: {e}")
+
+    # 2. 영상이거나 ImgBB 실패 시: Litterbox 시도
     for attempt in range(3):
+        try:
+            url = "https://litterbox.catbox.moe/resources/internals/api.php"
+            with open(file_path, 'rb') as f:
+                files = {'fileToUpload': f}
+                data = {'reqtype': 'fileupload', 'time': '1h'}
+                response = requests.post(url, data=data, files=files, timeout=60)
+            if response.status_code == 200 and "http" in response.text:
+                link = response.text.strip()
+                print(f"  [Litterbox] 성공: {file_path} -> {link}")
+                return link
+        except Exception as e:
+            print(f"  [Litterbox] 시도 {attempt+1} 실패: {e}")
+            time.sleep(3)
+
+    # 3. Catbox.moe 시도
+    for attempt in range(2):
         try:
             url = "https://catbox.moe/user/api.php"
             with open(file_path, 'rb') as f:
@@ -68,27 +104,11 @@ def upload_to_catbox(file_path):
                 response = requests.post(url, data=data, files=files, timeout=40)
             if response.status_code == 200 and "http" in response.text:
                 link = response.text.strip()
-                print(f"  [Catbox] 성공: {file_path} -> {link}")
+                print(f"  [Catbox] 성공: {link}")
                 return link
-        except Exception as e:
-            print(f"  [Catbox] 시도 {attempt+1} 실패: {e}")
-            time.sleep(5)
+        except:
+            time.sleep(3)
 
-    # 2. Catbox 실패 시 file.io 시도 (대체 서버)
-    print(f"  [Catbox] 최종 실패. 대체 서버(file.io)로 시도합니다...")
-    try:
-        url = "https://file.io"
-        with open(file_path, 'rb') as f:
-            files = {'file': f}
-            # file.io는 일시적 링크를 생성하며 1회 다운로드 후 삭제되거나 일정 시간 뒤 삭제됨
-            response = requests.post(url, files=files, timeout=40)
-        if response.status_code == 200:
-            link = response.json().get("link")
-            print(f"  [File.io] 성공: {file_path} -> {link}")
-            return link
-    except Exception as e:
-        print(f"  [File.io] 업로드 실패: {e}")
-    
     return None
 
 # ==========================================
@@ -312,7 +332,7 @@ def post_to_instagram_reels(video_path, caption):
     
     video_url = upload_to_catbox(video_path)
     if not video_url:
-        print("릴스 영상 업로드 실패 (Catbox/File.io 모두 불가)")
+        print("릴스 영상 업로드 실패 (모든 대체 서버 불가)")
         return False
 
     res = requests.post(upload_url, data={
@@ -352,26 +372,59 @@ def post_to_instagram_reels(video_path, caption):
     return False
 
 def post_to_instagram(image_urls, caption):
+    """게시글(앨범) 업로드 로직 - Meta 서버의 일시적 오류 및 차단 대응"""
     print(f"인스타그램 업로드 중 (이미지 {len(image_urls)}장)...")
     container_ids = []
+    
     for i, url in enumerate(image_urls):
-        res = requests.post(f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/media", 
-                            data={"image_url": url, "is_carousel_item": "true", "access_token": INSTAGRAM_ACCESS_TOKEN}).json()
-        if "id" in res: container_ids.append(res["id"])
-        else: print(f"  컨테이너 {i+1} 실패: {res}"); return
+        success = False
+        for attempt in range(3):
+            res = requests.post(f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/media", 
+                                data={
+                                    "image_url": url, 
+                                    "is_carousel_item": "true", 
+                                    "access_token": INSTAGRAM_ACCESS_TOKEN
+                                }).json()
+            
+            if "id" in res:
+                container_ids.append(res["id"])
+                success = True
+                break
+            else:
+                # 개별 아이템 생성 단계에서 차단된 경우
+                if res.get('error', {}).get('code') == 4:
+                    print(f"  [경고] 아이템 {i+1} 생성 중 API 한도 도달. (무시하고 진행 시도)")
+                print(f"  컨테이너 {i+1} 시도 {attempt+1} 실패: {res}")
+                time.sleep(15)
 
+        if not success:
+            print(f"  컨테이너 {i+1} 최종 실패로 인해 업로드를 중단합니다.")
+            return False
+
+    # 앨범 생성
     album_res = requests.post(f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/media",
-                              data={"media_type": "CAROUSEL", "children": ",".join(container_ids), "caption": caption, "access_token": INSTAGRAM_ACCESS_TOKEN}).json()
+                              data={
+                                  "media_type": "CAROUSEL", 
+                                  "children": ",".join(container_ids), 
+                                  "caption": caption, 
+                                  "access_token": INSTAGRAM_ACCESS_TOKEN
+                              }).json()
     
     if "id" in album_res:
         creation_id = album_res["id"]
-        time.sleep(5)
+        time.sleep(15)
         publish_res = requests.post(f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/media_publish", 
                                     data={"creation_id": creation_id, "access_token": INSTAGRAM_ACCESS_TOKEN}).json()
+        
         if "id" in publish_res: 
-            print(f"🎉 포스팅 성공! ID: {publish_res['id']}")
+            print(f"🎉 게시글 포스팅 성공! ID: {publish_res['id']}")
             return True
-        else: 
+        else:
+            # Code 4 에러 발생 시, 사용자 확인 결과 실제로는 업로드되므로 성공으로 처리하여 중복 방지
+            error_data = publish_res.get('error', {})
+            if error_data.get('code') == 4 or error_data.get('error_subcode') == 2207051:
+                print(f"⚠️ API 한도 도달 에러(Code 4)가 발생했으나, 실제로는 업로드되었을 가능성이 높습니다. 중복 방지를 위해 성공 처리합니다.")
+                return True
             print(f"❌ 최종 발행 실패: {publish_res}")
     else: 
         print(f"❌ 앨범 생성 실패: {album_res}")
@@ -457,6 +510,7 @@ def run_full_process(data):
         if url: public_urls.append(url)
         time.sleep(1)
 
+    reels_success = False
     # OpenCV로 영상 생성
     def make_video_from_images_cv2(image_paths, video_path):
         if not image_paths:
@@ -475,7 +529,7 @@ def run_full_process(data):
         print(f"영상 생성 완료: {video_path}")
         return video_path
 
-    video_path = os.path.join(output_dir, f"ohaasa_{date_str}.mp4")
+    video_path = os.path.join(output_dir, "ohaasa_final.mp4")
     make_video_from_images_cv2(image_paths, video_path)
 
     # 배경음악 합성
@@ -483,7 +537,7 @@ def run_full_process(data):
     if mp3_files:
         bgm_path = random.choice(mp3_files)
         print(f"랜덤 배경음악 선택: {bgm_path}")
-        video_with_bgm = os.path.join(output_dir, f"ohaasa_{date_str}_bgm.mp4")
+        video_with_bgm = os.path.join(output_dir, "ohaasa_final_bgm.mp4")
         cmd = [
             "ffmpeg", "-y",
             "-i", video_path,
@@ -502,11 +556,16 @@ def run_full_process(data):
 
         # 릴스 업로드
         reels_caption = f"🔮 {date_str[:4]}.{date_str[4:6]}.{date_str[6:]} 오하아사 별자리 운세\n오늘의 운세 순위를 영상으로 확인하세요! #오하아사 #오늘의운세 #별자리운세 #운세 #릴스"
-        post_to_instagram_reels(video_with_bgm, reels_caption)
-    
-    # 캐러셀(앨범) 업로드용 캡션
+        reels_success = post_to_instagram_reels(video_with_bgm, reels_caption)
+        print("릴스 업로드 후 30초 대기...")
+        time.sleep(30)
+
+    # 캐러셀(앨범) 업로드
     carousel_caption = f"🔮 {date_display} 오늘의 별자리 운세\n\nTV 아사히 '굿모닝'에서 제공하는 오늘의 운세 순위를 확인해보세요!\n\n#오하아사 #오늘의운세 #별자리운세 #운세 #일본운세"
-    return post_to_instagram(public_urls, carousel_caption) if public_urls else False
+    carousel_success = post_to_instagram(public_urls, carousel_caption) if public_urls else False
+
+    # 릴스 혹은 캐러셀 중 하나라도 성공하면 완료로 간주 (중복 방지)
+    return reels_success or carousel_success
 
 # ==========================================
 # [기능 5] 메인 루프
@@ -541,6 +600,8 @@ def main():
                 with open(tracking_file, "w") as f:
                     f.write(today_str)
                 print("주말 작업 완료 기록 저장.")
+            else:
+                print("모든 업로드 작업이 실패했습니다.")
         else:
             print(f"데이터 날짜({data['date']})가 오늘({today_str})과 다릅니다. 다음 스케줄에 재시도합니다.")
 
