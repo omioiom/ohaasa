@@ -1,49 +1,3 @@
-def post_to_instagram_reels(video_path, caption):
-    print(f"인스타그램 릴스 업로드 시작: {video_path}")
-    upload_url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/media"
-    publish_url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/media_publish"
-    # 릴스 업로드는 video_url 방식 사용
-    # 먼저 catbox에 업로드
-    video_url = upload_to_catbox(video_path)
-    if not video_url:
-        print("릴스 영상 catbox 업로드 실패")
-        return False
-    # Instagram 컨테이너 생성
-    res = requests.post(upload_url, data={
-        "media_type": "REELS",
-        "video_url": video_url,
-        "caption": caption,
-        "access_token": INSTAGRAM_ACCESS_TOKEN
-    }).json()
-    if "id" in res:
-        creation_id = res["id"]
-        print(f"릴스 컨테이너 생성 완료(ID: {creation_id})")
-        # 컨테이너 준비 상태 polling (최대 60초)
-        for i in range(12):
-            time.sleep(5)
-            status_url = f"https://graph.facebook.com/v18.0/{creation_id}?fields=status_code&access_token={INSTAGRAM_ACCESS_TOKEN}"
-            status_res = requests.get(status_url).json()
-            status_code = status_res.get("status_code", "")
-            print(f"릴스 컨테이너 상태: {status_code}")
-            if status_code == "FINISHED":
-                publish_res = requests.post(publish_url, data={
-                    "creation_id": creation_id,
-                    "access_token": INSTAGRAM_ACCESS_TOKEN
-                }).json()
-                if "id" in publish_res:
-                    print(f"🎉 릴스 포스팅 성공! ID: {publish_res['id']}")
-                    return True
-                else:
-                    print(f"❌ 릴스 최종 발행 실패: {publish_res}")
-                break
-            elif status_code == "ERROR":
-                print(f"❌ 릴스 컨테이너 오류: {status_res}")
-                break
-        else:
-            print("❌ 릴스 컨테이너 준비 시간 초과")
-    else:
-        print(f"❌ 릴스 컨테이너 생성 실패: {res}")
-    return False
 import cv2
 import requests
 import json
@@ -54,6 +8,8 @@ import re
 import datetime
 import time
 import sys
+import glob
+import subprocess
 from bs4 import BeautifulSoup
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
@@ -75,7 +31,7 @@ SIGN_MAP_JP = {
 SIGN_ASSET_MAP = {
     "양자리": "Aries",       "황소자리": "Taurus",    "쌍둥이자리": "Gemini",
     "게자리": "Cancer",      "사자자리": "Leo",        "처녀자리": "Virgo",
-    "천칭자리": "Libra",     "전갈자리": "Scorpio",    "사수자리": "Sagittarius",
+    "천칭자리": "Libra",      "전갈자리": "Scorpio",    "사수자리": "Sagittarius",
     "염소자리": "Capricorn", "물병자리": "Aquarius",   "물고기자리": "Pisces",
 }
 
@@ -98,6 +54,44 @@ RANK_BRONZE  = (178, 136, 108)
 RANK_BASE    = (185, 177, 162)
 
 # ==========================================
+# [수정] 업로드 기능 (재시도 및 대체 서버 로직 추가)
+# ==========================================
+def upload_to_catbox(file_path):
+    """Catbox 업로드를 시도하고 실패 시 3회 재시도하며, 최종 실패 시 file.io를 사용합니다."""
+    # 1. Catbox.moe 시도 (최대 3회)
+    for attempt in range(3):
+        try:
+            url = "https://catbox.moe/user/api.php"
+            with open(file_path, 'rb') as f:
+                files = {'fileToUpload': f}
+                data = {'reqtype': 'fileupload'}
+                response = requests.post(url, data=data, files=files, timeout=40)
+            if response.status_code == 200 and "http" in response.text:
+                link = response.text.strip()
+                print(f"  [Catbox] 성공: {file_path} -> {link}")
+                return link
+        except Exception as e:
+            print(f"  [Catbox] 시도 {attempt+1} 실패: {e}")
+            time.sleep(5)
+
+    # 2. Catbox 실패 시 file.io 시도 (대체 서버)
+    print(f"  [Catbox] 최종 실패. 대체 서버(file.io)로 시도합니다...")
+    try:
+        url = "https://file.io"
+        with open(file_path, 'rb') as f:
+            files = {'file': f}
+            # file.io는 일시적 링크를 생성하며 1회 다운로드 후 삭제되거나 일정 시간 뒤 삭제됨
+            response = requests.post(url, files=files, timeout=40)
+        if response.status_code == 200:
+            link = response.json().get("link")
+            print(f"  [File.io] 성공: {file_path} -> {link}")
+            return link
+    except Exception as e:
+        print(f"  [File.io] 업로드 실패: {e}")
+    
+    return None
+
+# ==========================================
 # [기능 1] 데이터 수집 및 번역 (TV 아사히 방식)
 # ==========================================
 def fetch_and_translate_ohaasa():
@@ -113,7 +107,6 @@ def fetch_and_translate_ohaasa():
 
         date_raw = soup.select_one('.rank-area .ttl-area').text if soup.select_one('.rank-area .ttl-area') else ""
         date_digits = re.findall(r'\d+', date_raw)
-        # 현재 연도 자동 추출
         current_year = datetime.datetime.now().year
         date_str = f"{current_year}{date_digits[0].zfill(2)}{date_digits[1].zfill(2)}" if len(date_digits) >= 2 else datetime.datetime.now().strftime("%Y%m%d")
 
@@ -145,7 +138,7 @@ def fetch_and_translate_ohaasa():
 
         print(f"AI 서버({MODEL_NAME}) 번역 요청 중...")
         prompt = f"""당신은 일본어 전문 번역가입니다. 아래 제공된 일본어 별자리 운세 JSON 데이터의 'content'와 'luck' 필드를 한국어로 자연스럽게 번역하세요.
-        만약 content 에 부적절하거나 쓸모없는 이모지나 기호 같은 문자가 포함되어 있다면 이를 제거한 후 번역하세요. 
+만약 content 에 부적절하거나 쓸모없는 이모지나 기호 같은 문자가 포함되어 있다면 이를 제거한 후 번역하세요. 
 특히 'luck' 필드에 포함된 'ラッキーカラー(행운의 색)'는 '행운의 색: [색상]', '幸運의 카기(행운의 열쇠/아이템)'는 '행운의 아이템: [아이템]' 형식으로 번역하세요.
 결과는 반드시 부연 설명 없이 JSON 코드만 출력하세요.
 데이터: {json.dumps(items_to_translate, ensure_ascii=False)}"""
@@ -167,12 +160,9 @@ def fetch_and_translate_ohaasa():
 
         final_results = []
         for item in translated_list:
-            # sign 필드가 일본어로 올 수도 있고, 번역 결과로 올 수도 있음. 모두 매핑 시도
             sign_jp = item.get('sign_jp') or item.get('sign') or item.get('st') or ''
             sign_kr = SIGN_MAP_JP.get(sign_jp, sign_jp)
-            # 혹시 번역 결과가 한글로 잘 들어왔으면 그대로 사용
             if sign_kr not in SIGN_ASSET_MAP:
-                # 번역 결과가 한글로 들어온 경우도 체크
                 sign_kr = item.get('sign', sign_kr)
             final_results.append({
                 "rank": item['rank'],
@@ -313,23 +303,53 @@ def draw_detail_section(img, item, start_y, fonts):
     return img
 
 # ==========================================
-# [기능 3] 호스팅 및 인스타그램 (Catbox)
+# [기능 3] 인스타그램 업로드 (릴스 및 앨범)
 # ==========================================
-def upload_to_catbox(file_path):
-    try:
-        url = "https://catbox.moe/user/api.php"
-        with open(file_path, 'rb') as f:
-            files = {'fileToUpload': f}
-            data = {'reqtype': 'fileupload'}
-            response = requests.post(url, data=data, files=files, timeout=30)
-        if response.status_code == 200:
-            link = response.text.strip()
-            print(f"  성공: {file_path} -> {link}")
-            return link
-        return None
-    except Exception as e:
-        print(f"  오류: {file_path} 업로드 실패 ({e})")
-        return None
+def post_to_instagram_reels(video_path, caption):
+    print(f"인스타그램 릴스 업로드 시작: {video_path}")
+    upload_url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/media"
+    publish_url = f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/media_publish"
+    
+    video_url = upload_to_catbox(video_path)
+    if not video_url:
+        print("릴스 영상 업로드 실패 (Catbox/File.io 모두 불가)")
+        return False
+
+    res = requests.post(upload_url, data={
+        "media_type": "REELS",
+        "video_url": video_url,
+        "caption": caption,
+        "access_token": INSTAGRAM_ACCESS_TOKEN
+    }).json()
+
+    if "id" in res:
+        creation_id = res["id"]
+        print(f"릴스 컨테이너 생성 완료(ID: {creation_id})")
+        for i in range(12):
+            time.sleep(10)
+            status_url = f"https://graph.facebook.com/v18.0/{creation_id}?fields=status_code&access_token={INSTAGRAM_ACCESS_TOKEN}"
+            status_res = requests.get(status_url).json()
+            status_code = status_res.get("status_code", "")
+            print(f"릴스 컨테이너 상태: {status_code}")
+            if status_code == "FINISHED":
+                publish_res = requests.post(publish_url, data={
+                    "creation_id": creation_id,
+                    "access_token": INSTAGRAM_ACCESS_TOKEN
+                }).json()
+                if "id" in publish_res:
+                    print(f"🎉 릴스 포스팅 성공! ID: {publish_res['id']}")
+                    return True
+                else:
+                    print(f"❌ 릴스 최종 발행 실패: {publish_res}")
+                break
+            elif status_code == "ERROR":
+                print(f"❌ 릴스 컨테이너 오류: {status_res}")
+                break
+        else:
+            print("❌ 릴스 컨테이너 준비 시간 초과")
+    else:
+        print(f"❌ 릴스 컨테이너 생성 실패: {res}")
+    return False
 
 def post_to_instagram(image_urls, caption):
     print(f"인스타그램 업로드 중 (이미지 {len(image_urls)}장)...")
@@ -384,7 +404,6 @@ def run_full_process(data):
     draw_s.rectangle([0, 0, IMG_W, 250], fill=BG_HEADER)
     draw_centered(draw_s, "TV-ASAHI FORTUNE", fonts['brand'], 55, TEXT_LIGHT)
     
-    # [수정] 타이틀 동적 생성
     m_val = int(date_str[4:6])
     d_val = int(date_str[6:])
     dynamic_title = f"{m_val}/{d_val} 오하아사"
@@ -438,11 +457,7 @@ def run_full_process(data):
         if url: public_urls.append(url)
         time.sleep(1)
 
-    if public_urls:
-        caption = f"🔮 {date_display} 오늘의 별자리 운세\n\nTV 아사히 '굿모닝'에서 제공하는 오늘의 운세 순위를 확인해보세요!\n\n#오하아사 #오늘의운세 #별자리운세 #운세 #일본운세"
-
-    # OpenCV로 영상 생성 함수
-    import subprocess
+    # OpenCV로 영상 생성
     def make_video_from_images_cv2(image_paths, video_path):
         if not image_paths:
             print("이미지 없음, 영상 생성 스킵")
@@ -460,12 +475,10 @@ def run_full_process(data):
         print(f"영상 생성 완료: {video_path}")
         return video_path
 
-    # 영상 생성 실행
     video_path = os.path.join(output_dir, f"ohaasa_{date_str}.mp4")
     make_video_from_images_cv2(image_paths, video_path)
 
-    # === 배경음악 합성 (ffmpeg 필요) ===
-    import glob
+    # 배경음악 합성
     mp3_files = glob.glob(os.path.join("asset", "mp3", "m*.mp3"))
     if mp3_files:
         bgm_path = random.choice(mp3_files)
@@ -485,32 +498,30 @@ def run_full_process(data):
             print(f"배경음악 합성 완료: {video_with_bgm}")
         except Exception as e:
             print(f"ffmpeg 합성 실패: {e}")
+            video_with_bgm = video_path
+
         # 릴스 업로드
-        caption = f"🔮 {date_str[:4]}.{date_str[4:6]}.{date_str[6:]} 오하아사 별자리 운세\n오늘의 운세 순위를 영상으로 확인하세요! #오하아사 #오늘의운세 #별자리운세 #운세 #릴스"
-        success = post_to_instagram_reels(video_with_bgm, caption)
-        if success:
-            with open("last_upload_weekend.txt", "w") as f:
-                f.write(date_str)
-            print(f"🎉 {date_str} 릴스 업로드 완료.")
-    else:
-        print("mp3 파일 없음: asset/mp3/m*.mp3")
+        reels_caption = f"🔮 {date_str[:4]}.{date_str[4:6]}.{date_str[6:]} 오하아사 별자리 운세\n오늘의 운세 순위를 영상으로 확인하세요! #오하아사 #오늘의운세 #별자리운세 #운세 #릴스"
+        post_to_instagram_reels(video_with_bgm, reels_caption)
+    
+    # 캐러셀(앨범) 업로드용 캡션
+    carousel_caption = f"🔮 {date_display} 오늘의 별자리 운세\n\nTV 아사히 '굿모닝'에서 제공하는 오늘의 운세 순위를 확인해보세요!\n\n#오하아사 #오늘의운세 #별자리운세 #운세 #일본운세"
+    return post_to_instagram(public_urls, carousel_caption) if public_urls else False
 
-    return post_to_instagram(public_urls, caption) if public_urls else False
-
+# ==========================================
+# [기능 5] 메인 루프
+# ==========================================
 def main():
-    # 한국 시간 기준 계산
     kst_now = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
     today_str = kst_now.strftime("%Y%m%d")
 
-    # 1. 요일 및 시간 확인 (한국시간 토/일, 오전 5~11시만 실행)
     if kst_now.weekday() not in [5, 6]:
         print(f"오늘은 한국시간 토/일이 아니므로 종료합니다. (요일: {kst_now.weekday()})")
         return
-    if not (5 <= kst_now.hour < 10):
-        print(f"한국시간 오전 5~10시가 아니므로 종료합니다. (현재: {kst_now.hour}시)")
+    if not (5 <= kst_now.hour < 11):
+        print(f"한국시간 오전 5~11시가 아니므로 종료합니다. (현재: {kst_now.hour}시)")
         return
 
-    # 2. 업로드 여부 확인 (중복 방지)
     tracking_file = "last_upload_weekend.txt"
     if os.path.exists(tracking_file):
         with open(tracking_file, "r") as f:
@@ -519,12 +530,10 @@ def main():
                 return
 
     try:
-        # 3. 데이터 수집 및 result.json 생성
         data = fetch_and_translate_ohaasa()
         with open("result.json", "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
         
-        # 4. 날짜 일치 확인
         if data['date'] == today_str:
             print(f"날짜 일치 확인 ({today_str}). 프로세스 시작.")
             success = run_full_process(data)
