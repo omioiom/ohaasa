@@ -577,8 +577,8 @@ def main():
     if kst_now.weekday() not in [5, 6]:
         print(f"오늘은 한국시간 토/일이 아니므로 종료합니다. (요일: {kst_now.weekday()})")
         return
-    if not (5 <= kst_now.hour < 11):
-        print(f"한국시간 오전 5~11시가 아니므로 종료합니다. (현재: {kst_now.hour}시)")
+    if not (7 <= kst_now.hour < 11):
+        print(f"한국시간 오전 7~11시가 아니므로 종료합니다. (현재: {kst_now.hour}시)")
         return
 
     tracking_file = "last_upload_weekend.txt"

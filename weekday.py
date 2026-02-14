@@ -386,11 +386,16 @@ def post_to_instagram(image_urls, caption):
 def main():
     kst_now = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
     today_str = kst_now.strftime("%Y%m%d")
-    
-    # 주말 여부 확인 로직 (주말용 스크립트라면 이 부분을 조정해야 할 수 있습니다.)
-    # 현재 코드상 평일(0~4)에만 작동하게 되어있으나, 파일명이 weekend.py인 것을 고려하여 
-    # 날짜 일치 확인이 우선되도록 설계되었습니다.
-    
+
+    # 월~금(0~4)만 실행
+    if kst_now.weekday() > 4:
+        print("오늘은 평일(월~금)이 아니므로 종료합니다.")
+        return
+    # 오전 7~11시만 실행
+    if not (7 <= kst_now.hour < 12):
+        print(f"현재 {kst_now.hour}시: 7~11시가 아니므로 종료합니다.")
+        return
+
     # 중복 업로드 방지 확인
     last_file = "last_upload_weekend.txt" if "weekend" in sys.argv[0] else "last_upload.txt"
     if os.path.exists(last_file):
