@@ -1,19 +1,24 @@
-# Force update 2026-02-14
+# Force update 2026-02-15
 name: Ohaasa Weekend Instagram Uploader
 
 on:
   schedule:
-    # 한국 시간 토~일 오전 05:05 ~ 11:05 (UTC 기준 금~일)
-    # 20:05~23:59 UTC (금,토) -> 05:05~08:59 KST (토,일)
-    - cron: '*/5 * * * *' # 15분마다 실행
+    # 5분마다 실행 (설명과 일치하도록 설정 유지)
+    - cron: '*/5 * * * *' 
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Push 권한을 명시적으로 부여합니다.
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -33,8 +38,20 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
+          
+          # 1. 생성된 영상, 이미지 및 결과 JSON 파일을 모두 스테이징에 추가
+          # ohaasa_final_post 폴더 내의 모든 변경사항을 포함합니다.
+          git add ohaasa_final_post/* result.json
+          
+          # 2. 주말 전용 업로드 체크 파일이 있다면 추가
           if [ -f last_upload_weekend.txt ]; then
             git add last_upload_weekend.txt
-            git commit -m "Update weekend upload status" || echo "No changes"
+          fi
+          
+          # 3. 변경 사항이 있을 때만 커밋 및 푸시 실행
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Auto-update: Weekend content generated $(date +'%Y-%m-%d %H:%M')"
             git push
+          else
+            echo "No changes to commit"
           fi
