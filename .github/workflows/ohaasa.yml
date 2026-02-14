@@ -3,13 +3,17 @@ name: Ohaasa Instagram Uploader
 
 on:
   schedule:
-    # 3분마다 실행 (UTC 기준 20:05 ~ 02:05는 한국 시간 05:05 ~ 11:05)
-    - cron: '*/5 * * * *' # 3분마다 실행
+    # 5분마다 실행 (UTC 기준 20:05 ~ 02:05는 한국 시간 05:05 ~ 11:05)
+    - cron: '*/5 * * * *' 
   workflow_dispatch: # 수동 실행 버튼 추가
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # 권한 설정 추가 (Push를 위해 필요할 수 있음)
+    permissions:
+      contents: write
+      
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -34,9 +38,20 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          # last_upload.txt가 변경되었다면 커밋하여 중복 실행 방지
+          
+          # 1. 변경된 모든 파일(이미지, 영상, json, txt 등)을 스테이징에 추가합니다.
+          git add ohaasa_final_post/* result.json
+          
+          # 2. 만약 last_upload.txt가 있다면 이것도 추가합니다. (기존 기능 유지)
           if [ -f last_upload.txt ]; then
             git add last_upload.txt
-            git commit -m "Update last upload date" || echo "No changes to commit"
+          fi
+          
+          # 3. 변경사항이 있는지 확인 후 커밋 및 푸시
+          # [ -n "$(git status --porcelain)" ] 는 변경된 파일이 있는지 확인하는 조건문입니다.
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Auto-update: Generated Ohaasa content $(date +'%Y-%m-%d %H:%M')"
             git push
+          else
+            echo "No changes to commit"
           fi
