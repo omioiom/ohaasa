@@ -77,6 +77,15 @@ def upload_to_catbox(file_path):
                     return link
         except Exception as e:
             print(f"  [ImgBB] 시도 실패: {e}")
+            # imgdb.net 오류 감지 시 바로 Litterbox로 넘어감
+            if (
+                (isinstance(e, requests.exceptions.ConnectionError) and 'imgdb.net' in str(e)) or
+                (isinstance(e, Exception) and 'imgdb.net' in str(e)) or
+                (isinstance(e, Exception) and 'HTTPSConnectionPool(host=\'imgdb.net\'' in str(e))
+            ):
+                print("  [ImgBB] imgdb.net 오류 감지, Litterbox로 우선 시도")
+            else:
+                pass  # 그냥 아래로 진행
 
     # 2. 영상이거나 ImgBB 실패 시: Litterbox 시도
     for attempt in range(3):
@@ -118,6 +127,8 @@ def fetch_and_translate_ohaasa():
     TV_ASAHI_URL = "https://www.tv-asahi.co.jp/goodmorning/uranai/index.html"
     MODEL_SERVER_URL = "http://223.130.130.97:11434/api/generate"
     MODEL_NAME = "gpt-oss:120b"
+    GEMINI_API_KEY = "AIzaSyA2zmmUog9Ohd0XEiviwM2WS9PYPZjJDio"
+    GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
 
     try:
         print(f"TV 아사히 데이터 로드 중...")
@@ -157,26 +168,48 @@ def fetch_and_translate_ohaasa():
             })
 
         print(f"AI 서버({MODEL_NAME}) 번역 요청 중...")
-        prompt = f"""당신은 일본어 전문 번역가입니다. 아래 제공된 일본어 별자리 운세 JSON 데이터의 'content'와 'luck' 필드를 한국어로 자연스럽게 번역하세요.
-만약 content 에 부적절하거나 쓸모없는 이모지나 기호 같은 문자가 포함되어 있다면 이를 제거한 후 번역하세요. 
-특히 'luck' 필드에 포함된 'ラッキーカラー(행운의 색)'는 '행운의 색: [색상]', '幸運의 카기(행운의 열쇠/아이템)'는 '행운의 아이템: [아이템]' 형식으로 번역하세요.
-결과는 반드시 부연 설명 없이 JSON 코드만 출력하세요.
-데이터: {json.dumps(items_to_translate, ensure_ascii=False)}"""
+        prompt = f"""당신은 일본어 전문 번역가입니다. 아래 제공된 일본어 별자리 운세 JSON 데이터의 'content'와 'luck' 필드를 한국어로 자연스럽게 번역하세요.\n만약 content 에 부적절하거나 쓸모없는 이모지나 기호 같은 문자가 포함되어 있다면 이를 제거한 후 번역하세요. \n특히 'luck' 필드에 포함된 'ラッキーカラー(행운의 색)'는 '행운의 색: [색상]', '幸運의 카기(행운의 열쇠/아이템)'는 '행운의 아이템: [아이템]' 형식으로 번역하세요.\n결과는 반드시 부연 설명 없이 JSON 코드만 출력하세요.\n데이터: {json.dumps(items_to_translate, ensure_ascii=False)}"""
 
         headers = {"Content-Type": "application/json"}
         payload = {"model": MODEL_NAME, "prompt": prompt, "stream": False}
 
-        resp = requests.post(MODEL_SERVER_URL, headers=headers, json=payload, timeout=90)
-        resp.raise_for_status()
-        
-        raw_text = resp.json().get("response", "")
-        json_str = re.sub(r"```json|```", "", raw_text).strip()
-        
         try:
-            translated_list = json.loads(json_str)
-        except:
-            match = re.search(r"(\[.*\])", json_str, re.DOTALL)
-            translated_list = json.loads(match.group(1)) if match else []
+            resp = requests.post(MODEL_SERVER_URL, headers=headers, json=payload, timeout=90)
+            resp.raise_for_status()
+            raw_text = resp.json().get("response", "")
+            json_str = re.sub(r"```json|```", "", raw_text).strip()
+            try:
+                translated_list = json.loads(json_str)
+            except:
+                match = re.search(r"(\[.*\])", json_str, re.DOTALL)
+                translated_list = json.loads(match.group(1)) if match else []
+        except Exception as e:
+            print(f"gpt-oss 번역 실패, Gemini 2.5 Flash로 대체: {e}")
+            gemini_prompt = [
+                {
+                    "role": "user",
+                    "parts": [
+                        f"당신은 일본어 전문 번역가입니다. 아래 제공된 일본어 별자리 운세 JSON 데이터의 'content'와 'luck' 필드를 한국어로 자연스럽게 번역하세요. 만약 content 에 부적절하거나 쓸모없는 이모지나 기호 같은 문자가 포함되어 있다면 이를 제거한 후 번역하세요. 특히 'luck' 필드에 포함된 'ラッキーカラー(행운의 색)'는 '행운의 색: [색상]', '幸運의 카기(행운의 열쇠/아이템)'는 '행운의 아이템: [아이템]' 형식으로 번역하세요. 결과는 반드시 부연 설명 없이 JSON 코드만 출력하세요. 데이터: {json.dumps(items_to_translate, ensure_ascii=False)}"
+                    ]
+                }
+            ]
+            gemini_headers = {"Content-Type": "application/json"}
+            gemini_payload = {"contents": gemini_prompt}
+            gemini_resp = requests.post(GEMINI_URL, headers=gemini_headers, json=gemini_payload, timeout=90)
+            gemini_resp.raise_for_status()
+            candidates = gemini_resp.json().get("candidates", [])
+            gemini_text = ""
+            for c in candidates:
+                parts = c.get("content", {}).get("parts", [])
+                for p in parts:
+                    if isinstance(p, str):
+                        gemini_text += p
+            json_str = re.sub(r"```json|```", "", gemini_text).strip()
+            try:
+                translated_list = json.loads(json_str)
+            except:
+                match = re.search(r"(\[.*\])", json_str, re.DOTALL)
+                translated_list = json.loads(match.group(1)) if match else []
 
         final_results = []
         for item in translated_list:
@@ -571,6 +604,7 @@ def run_full_process(data):
 # [기능 5] 메인 루프
 # ==========================================
 def main():
+
     kst_now = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
     today_str = kst_now.strftime("%Y%m%d")
 
@@ -592,15 +626,127 @@ def main():
         data = fetch_and_translate_ohaasa()
         with open("result.json", "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
-        
+
         if data['date'] == today_str:
             print(f"날짜 일치 확인 ({today_str}). 프로세스 시작.")
-            success = run_full_process(data)
-            if success:
-                with open(tracking_file, "w") as f:
-                    f.write(today_str)
-                print("주말 작업 완료 기록 저장.")
-            else:
+            # 릴스 성공 시 바로 기록
+            def run_and_record():
+                output_dir = "ohaasa_final_post"
+                if not os.path.exists(output_dir): os.makedirs(output_dir)
+                results = data['results']
+                date_str2 = data['date']
+                bold_p, reg_p = find_nanum_fonts()
+                fonts = {
+                    'brand': get_font(reg_p, 22), 'date': get_font(reg_p, 26), 'title': get_font(bold_p, 58),
+                    'rank_sm': get_font(bold_p, 42), 'rank_md': get_font(bold_p, 70), 'sign_sm': get_font(reg_p, 50),
+                    'sign_md': get_font(bold_p, 52), 'label_sm': get_font(reg_p, 18), 'label_xs': get_font(reg_p, 15),
+                    'content_sm': get_font(reg_p, 30), 'lucky_sm': get_font(bold_p, 36)
+                }
+                image_paths = []
+                img_s = make_solid_bg(IMG_W, IMG_H)
+                draw_s = ImageDraw.Draw(img_s)
+                draw_s.rectangle([0, 0, IMG_W, 250], fill=BG_HEADER)
+                draw_centered(draw_s, "TV-ASAHI FORTUNE", fonts['brand'], 55, TEXT_LIGHT)
+                m_val = int(date_str2[4:6])
+                d_val = int(date_str2[6:])
+                dynamic_title = f"{m_val}/{d_val} 오하아사"
+                draw_centered(draw_s, dynamic_title, fonts['title'], 100, TEXT_DARK)
+                draw_centered(draw_s, f"{date_str2[:4]}.{date_str2[4:6]}.{date_str2[6:]} {_weekday_kr(date_str2)}요일", fonts['date'], 190, TEXT_MID)
+                COL_RANK_END, COL_ICON_CENTER, COL_SIGN_START = 400, 485, 560
+                y_cur, ROW_H = 280, 82
+                for item in results:
+                    rc, rs = rank_color(item['rank']), str(item['rank'])
+                    center_y = y_cur + (ROW_H // 2)
+                    r_w = draw_s.textbbox((0, 0), rs, font=fonts['rank_sm'])[2]
+                    draw_s.text((COL_RANK_END - r_w, center_y - 21), rs, fill=rc, font=fonts['rank_sm'])
+                    s_icon = load_sign_image(item['sign'], 50)
+                    if s_icon:
+                        img_s.paste(s_icon, (int(COL_ICON_CENTER - s_icon.width//2), int(center_y - s_icon.height//2 - 3)), s_icon)
+                        draw_s = ImageDraw.Draw(img_s)
+                    draw_s.text((COL_SIGN_START, center_y - 25), item['sign'], fill=TEXT_DARK, font=fonts['sign_sm'])
+                    draw_s.line([(180, y_cur + ROW_H), (IMG_W - 180, y_cur + ROW_H)], fill=LINE, width=1)
+                    y_cur += ROW_H
+                path_s = os.path.join(output_dir, "00_summary.png")
+                img_s.save(path_s); image_paths.append(path_s)
+                results_reversed = results[::-1] 
+                for i in range(0, len(results_reversed), 2):
+                    pair = results_reversed[i:i+2]
+                    img = make_solid_bg(IMG_W, IMG_H)
+                    draw = ImageDraw.Draw(img)
+                    draw_centered(draw, f"OHAASA | {date_str2[:4]}.{date_str2[4:6]}.{date_str2[6:]} {_weekday_kr(date_str2)}요일", fonts['brand'], 40, TEXT_LIGHT)
+                    draw.line([(100, 80), (IMG_W-100, 80)], fill=LINE, width=1)
+                    img = draw_detail_section(img, pair[0], 95, fonts)
+                    mid_y = IMG_H // 2 
+                    draw = ImageDraw.Draw(img)
+                    draw.line([(80, mid_y), (IMG_W-80, mid_y)], fill=LINE, width=1)
+                    if len(pair) > 1:
+                        img = draw_detail_section(img, pair[1], mid_y + 15, fonts)
+                    draw = ImageDraw.Draw(img)
+                    draw_centered(draw, "FOR YOUR LUCKY DAY", fonts['brand'], IMG_H - 65, TEXT_LIGHT)
+                    path_d = os.path.join(output_dir, f"detail_{i//2 + 1}.png")
+                    img.save(path_d); image_paths.append(path_d)
+                public_urls = []
+                for p in image_paths:
+                    url = upload_to_catbox(p)
+                    if url: public_urls.append(url)
+                    time.sleep(1)
+                reels_success = False
+                def make_video_from_images_cv2(image_paths, video_path):
+                    if not image_paths:
+                        print("이미지 없음, 영상 생성 스킵")
+                        return None
+                    first_img = cv2.imread(image_paths[0])
+                    height, width, _ = first_img.shape
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    out = cv2.VideoWriter(video_path, fourcc, 24, (width, height))
+                    for idx, img_path in enumerate(image_paths):
+                        duration = 2 if idx == 0 else 4
+                        frame = cv2.imread(img_path)
+                        for _ in range(duration * 24):
+                            out.write(frame)
+                    out.release()
+                    print(f"영상 생성 완료: {video_path}")
+                    return video_path
+                video_path = os.path.join(output_dir, "ohaasa_final.mp4")
+                make_video_from_images_cv2(image_paths, video_path)
+                mp3_files = glob.glob(os.path.join("asset", "mp3", "m*.mp3"))
+                if mp3_files:
+                    bgm_path = random.choice(mp3_files)
+                    print(f"랜덤 배경음악 선택: {bgm_path}")
+                    video_with_bgm = os.path.join(output_dir, "ohaasa_final_bgm.mp4")
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-i", video_path,
+                        "-i", bgm_path,
+                        "-c:v", "copy",
+                        "-c:a", "aac",
+                        "-shortest",
+                        video_with_bgm
+                    ]
+                    try:
+                        subprocess.run(cmd, check=True)
+                        print(f"배경음악 합성 완료: {video_with_bgm}")
+                    except Exception as e:
+                        print(f"ffmpeg 합성 실패: {e}")
+                        video_with_bgm = video_path
+                    reels_caption = f"🔮 {date_str2[:4]}.{date_str2[4:6]}.{date_str2[6:]} 오하아사 별자리 운세\n오늘의 운세 순위를 영상으로 확인하세요! #오하아사 #오늘의운세 #별자리운세 #운세 #릴스"
+                    reels_success = post_to_instagram_reels(video_with_bgm, reels_caption)
+                    if reels_success:
+                        with open(tracking_file, "w") as f:
+                            f.write(today_str)
+                        print("릴스 성공, 즉시 기록 저장.")
+                        return True
+                    print("릴스 업로드 후 30초 대기...")
+                    time.sleep(30)
+                carousel_caption = f"🔮 {date_str2[:4]}.{date_str2[4:6]}.{date_str2[6:]} {_weekday_kr(date_str2)}요일 오늘의 별자리 운세\n\nTV 아사히 '굿모닝'에서 제공하는 오늘의 운세 순위를 확인해보세요!\n\n#오하아사 #오늘의운세 #별자리운세 #운세 #일본운세"
+                carousel_success = post_to_instagram(public_urls, carousel_caption) if public_urls else False
+                if carousel_success:
+                    with open(tracking_file, "w") as f:
+                        f.write(today_str)
+                    print("캐러셀 성공, 기록 저장.")
+                return reels_success or carousel_success
+            success = run_and_record()
+            if not success:
                 print("모든 업로드 작업이 실패했습니다.")
         else:
             print(f"데이터 날짜({data['date']})가 오늘({today_str})과 다릅니다. 다음 스케줄에 재시도합니다.")
