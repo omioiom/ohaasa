@@ -325,8 +325,23 @@ def post_to_instagram(image_urls, caption, date_str):
 # [기능 4] 메인 프로세스
 # ==========================================
 def main():
+
     kst_now = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
     today_str = kst_now.strftime("%Y%m%d")
+
+    # last_upload.txt 날짜와 오늘이 같으면 실행 막기
+    last_upload_date = None
+    if os.path.exists("last_upload.txt"):
+        with open("last_upload.txt", "r") as f:
+            last_upload_date = f.read().strip()
+    if last_upload_date == today_str:
+        print(f"오늘({today_str}) 이미 업로드됨. 실행 중단.")
+        return
+
+    # 오전 7시~10시 사이에만 실행
+    if not (7 <= kst_now.hour < 10):
+        print(f"현재 KST {kst_now.hour}시: 오전 7시~10시 사이에만 실행됩니다. 실행 중단.")
+        return
 
     try:
         fetched_data = fetch_and_translate_ohaasa()

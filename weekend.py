@@ -608,19 +608,25 @@ def main():
     kst_now = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
     today_str = kst_now.strftime("%Y%m%d")
 
+    # 토/일만 실행
     if kst_now.weekday() not in [5, 6]:
         print(f"오늘은 한국시간 토/일이 아니므로 종료합니다. (요일: {kst_now.weekday()})")
         return
-    if not (7 <= kst_now.hour < 11):
-        print(f"한국시간 오전 7~11시가 아니므로 종료합니다. (현재: {kst_now.hour}시)")
+
+    # 오전 7~10시만 실행 (10시 포함X)
+    if not (7 <= kst_now.hour < 10):
+        print(f"현재 KST {kst_now.hour}시: 오전 7~10시 사이에만 실행됩니다. 실행 중단.")
         return
 
+    # 오늘 이미 업로드했으면 중단
     tracking_file = "last_upload_weekend.txt"
+    last_upload_date = None
     if os.path.exists(tracking_file):
         with open(tracking_file, "r") as f:
-            if f.read().strip() == today_str:
-                print(f"오늘({today_str})은 이미 주말 운세 업로드가 완료되었습니다.")
-                return
+            last_upload_date = f.read().strip()
+    if last_upload_date == today_str:
+        print(f"오늘({today_str})은 이미 주말 운세 업로드가 완료되었습니다. 실행 중단.")
+        return
 
     try:
         data = fetch_and_translate_ohaasa()
