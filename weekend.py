@@ -59,36 +59,34 @@ RANK_BASE    = (185, 177, 162)
 # [수정] 업로드 기능 (이미지: ImgBB / 영상: Litterbox 최적화)
 # ==========================================
 def upload_to_catbox(file_path):
-    """이미지는 ImgBB, 영상은 고속 Litterbox를 최우선으로 시도합니다."""
+    """이미지는 ImgBB -> Litterbox -> Catbox 순서 시도 / 실패 시 1분, 3분, 5분 대기 후 재시도"""
     ext = os.path.splitext(file_path)[1].lower()
     is_video = ext == '.mp4'
 
-    # 1. 이미지라면 ImgBB 시도 (최우선)
-    if not is_video:
-        try:
-            url = "https://api.imgbb.com/1/upload"
-            with open(file_path, "rb") as f:
-                payload = {"key": IMGBB_API_KEY, "image": base64.b64encode(f.read())}
-                response = requests.post(url, data=payload, timeout=60)
-            if response.status_code == 200:
-                link = response.json().get("data", {}).get("url")
-                if link:
-                    print(f"  [ImgBB] 성공: {file_path} -> {link}")
-                    return link
-        except Exception as e:
-            print(f"  [ImgBB] 시도 실패: {e}")
-            # imgdb.net 오류 감지 시 바로 Litterbox로 넘어감
-            if (
-                (isinstance(e, requests.exceptions.ConnectionError) and 'imgdb.net' in str(e)) or
-                (isinstance(e, Exception) and 'imgdb.net' in str(e)) or
-                (isinstance(e, Exception) and 'HTTPSConnectionPool(host=\'imgdb.net\'' in str(e))
-            ):
-                print("  [ImgBB] imgdb.net 오류 감지, Litterbox로 우선 시도")
-            else:
-                pass  # 그냥 아래로 진행
+    # 재시도 대기 시간 설정 (첫 시도는 0초, 이후 1분, 3분, 5분)
+    retry_intervals = [0, 60, 180, 300]
 
-    # 2. 영상이거나 ImgBB 실패 시: Litterbox 시도
-    for attempt in range(3):
+    for attempt, wait_sec in enumerate(retry_intervals):
+        if wait_sec > 0:
+            print(f"  [대기] 모든 업로드 서버가 응답하지 않습니다. {wait_sec}초 후 {attempt}회차 재시도를 시작합니다...")
+            time.sleep(wait_sec)
+
+        # 1. 이미지일 경우 ImgBB 우선 시도
+        if not is_video:
+            try:
+                url = "https://api.imgbb.com/1/upload"
+                with open(file_path, "rb") as f:
+                    payload = {"key": IMGBB_API_KEY, "image": base64.b64encode(f.read())}
+                    response = requests.post(url, data=payload, timeout=60)
+                if response.status_code == 200:
+                    link = response.json().get("data", {}).get("url")
+                    if link:
+                        print(f"  [ImgBB] 성공: {link}")
+                        return link
+            except Exception as e:
+                print(f"  [ImgBB] 시도 실패: {e}")
+
+        # 2. Litterbox 시도 (영상 및 이미지 공통)
         try:
             url = "https://litterbox.catbox.moe/resources/internals/api.php"
             with open(file_path, 'rb') as f:
@@ -97,27 +95,27 @@ def upload_to_catbox(file_path):
                 response = requests.post(url, data=data, files=files, timeout=60)
             if response.status_code == 200 and "http" in response.text:
                 link = response.text.strip()
-                print(f"  [Litterbox] 성공: {file_path} -> {link}")
+                print(f"  [Litterbox] 성공: {link}")
                 return link
         except Exception as e:
-            print(f"  [Litterbox] 시도 {attempt+1} 실패: {e}")
-            time.sleep(3)
+            print(f"  [Litterbox] 시도 실패: {e}")
 
-    # 3. Catbox.moe 시도
-    for attempt in range(2):
+        # 3. Catbox 시도 (최종 보루)
         try:
             url = "https://catbox.moe/user/api.php"
             with open(file_path, 'rb') as f:
                 files = {'fileToUpload': f}
                 data = {'reqtype': 'fileupload'}
-                response = requests.post(url, data=data, files=files, timeout=40)
+                response = requests.post(url, data=data, files=files, timeout=60)
             if response.status_code == 200 and "http" in response.text:
                 link = response.text.strip()
                 print(f"  [Catbox] 성공: {link}")
                 return link
-        except:
-            time.sleep(3)
+        except Exception as e:
+            print(f"  [Catbox] 시도 실패: {e}")
 
+    # 모든 재시도 끝에 실패한 경우
+    print(f"  [최종 실패] 5분 대기 후 재시도까지 모두 실패했습니다: {file_path}")
     return None
 
 # ==========================================
@@ -613,9 +611,9 @@ def main():
         print(f"오늘은 한국시간 토/일이 아니므로 종료합니다. (요일: {kst_now.weekday()})")
         return
 
-    # 오전 7~10시만 실행 (10시 포함X)
-    if not (7 <= kst_now.hour < 10):
-        print(f"현재 KST {kst_now.hour}시: 오전 7~10시 사이에만 실행됩니다. 실행 중단.")
+    # 오전 6~10시만 실행 (10시 포함X)
+    if not (6 <= kst_now.hour < 10):
+        print(f"현재 KST {kst_now.hour}시: 오전 6~10시 사이에만 실행됩니다. 실행 중단.")
         return
 
     # 오늘 이미 업로드했으면 중단

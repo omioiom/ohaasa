@@ -1,4 +1,5 @@
 import requests
+import base64
 import json
 import os
 import math
@@ -14,6 +15,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 # ==========================================
 INSTAGRAM_ACCESS_TOKEN = "EAAd6uwZBluwsBQraZBXkNCmgfib8ZB5gEPYOv5OIGuX1ZC6cSUTY5X2HI93XydyaEZCq99tjBuPURHOlc9DybydWoZCV7A8ZCeHuAWaI4lVnfRCximXPKF8VYmiGfgH0y5hGPV6tq28DoZCaZBHqsKuONZAy8CFD7D28JdnlkiGCKjb4uoOj8f0h372yqVezBv"
 INSTAGRAM_ACCOUNT_ID = "17841449814829956"
+IMGBB_API_KEY = "4b8f860f3d842b4f48a0d371fff6845d"
 GEMINI_API_KEY = "AIzaSyA2zmmUog9Ohd0XEiviwM2WS9PYPZjJDio"
 
 # ==========================================
@@ -221,50 +223,70 @@ def draw_detail_section(img, item, start_y, fonts):
 # ==========================================
 # [기능 3] 호스팅 (imgdb 실패 시 Litterbox 사용)
 # ==========================================
-def upload_image(file_path):
-    # imgDB 먼저 시도, 실패(연결 오류 등) 시 Litterbox로 시도
-    url = "https://imgdb.net/api/upload"
-    try:
-        with open(file_path, 'rb') as f:
-            files = {'image': f}
-            data = {'key': 'public_api_key', 'format': 'json'}
-            response = requests.post(url, data=data, files=files, timeout=30)
-        if response.status_code == 200:
-            res = response.json()
-            if res.get('status_code') == 200 and 'image' in res:
-                link = res['image']['url']
-                print(f"  [imgDB] 업로드 성공: {link}")
-                return link
-            else:
-                print(f"  [imgDB] 응답 오류: {res}")
-        else:
-            print(f"  [imgDB] HTTP 오류: {response.status_code}")
-    except Exception as e:
-        err_str = str(e)
-        print(f"  [imgDB] 오류: {err_str}")
-        # imgDB 연결 오류 감지 시 Litterbox로 대체
-        if 'Failed to establish a new connection' in err_str or 'Connection refused' in err_str or 'Max retries exceeded' in err_str:
-            print("  [imgDB] 연결 오류 감지, Litterbox로 대체 시도...")
-            return upload_to_litterbox(file_path)
-    # 기타 실패 시에도 Litterbox로 시도
-    return upload_to_litterbox(file_path)
+def upload_to_catbox(file_path):
+    """이미지는 ImgBB -> Litterbox -> Catbox 순서 시도 / 실패 시 1분, 3분, 5분 대기 후 재시도"""
+    ext = os.path.splitext(file_path)[1].lower()
+    is_video = ext == '.mp4'
 
-def upload_to_litterbox(file_path):
-    try:
-        url = "https://litterbox.catbox.moe/resources/internals/api.php"
-        with open(file_path, 'rb') as f:
-            files = {'fileToUpload': f}
-            data = {'reqtype': 'fileupload', 'time': '1h'}
-            response = requests.post(url, data=data, files=files, timeout=60)
-        if response.status_code == 200:
-            link = response.text.strip()
-            if link.startswith("http"):
-                print(f"  [Litterbox] 업로드 성공: {link}")
+    # IMGBB_API_KEY는 상단에 정의되어 있어야 함
+    global IMGBB_API_KEY
+
+    # 재시도 대기 시간 설정 (첫 시도는 0초, 이후 1분, 3분, 5분)
+    retry_intervals = [0, 60, 180, 300]
+
+    for attempt, wait_sec in enumerate(retry_intervals):
+        if wait_sec > 0:
+            print(f"  [대기] 모든 업로드 서버가 응답하지 않습니다. {wait_sec}초 후 {attempt}회차 재시도를 시작합니다...")
+            time.sleep(wait_sec)
+
+        # 1. 이미지일 경우 ImgBB 우선 시도
+        if not is_video:
+            try:
+                url = "https://api.imgbb.com/1/upload"
+                with open(file_path, "rb") as f:
+                    payload = {"key": IMGBB_API_KEY, "image": base64.b64encode(f.read())}
+                    response = requests.post(url, data=payload, timeout=60)
+                if response.status_code == 200:
+                    link = response.json().get("data", {}).get("url")
+                    if link:
+                        print(f"  [ImgBB] 성공: {link}")
+                        return link
+            except Exception as e:
+                print(f"  [ImgBB] 시도 실패: {e}")
+
+        # 2. Litterbox 시도 (영상 및 이미지 공통)
+        try:
+            url = "https://litterbox.catbox.moe/resources/internals/api.php"
+            with open(file_path, 'rb') as f:
+                files = {'fileToUpload': f}
+                data = {'reqtype': 'fileupload', 'time': '1h'}
+                response = requests.post(url, data=data, files=files, timeout=60)
+            if response.status_code == 200 and "http" in response.text:
+                link = response.text.strip()
+                print(f"  [Litterbox] 성공: {link}")
                 return link
-        print(f"  [Litterbox] 응답 오류: {response.text}")
-    except Exception as e:
-        print(f"  [Litterbox] 연결 오류: {e}")
+        except Exception as e:
+            print(f"  [Litterbox] 시도 실패: {e}")
+
+        # 3. Catbox 시도 (최종 보루)
+        try:
+            url = "https://catbox.moe/user/api.php"
+            with open(file_path, 'rb') as f:
+                files = {'fileToUpload': f}
+                data = {'reqtype': 'fileupload'}
+                response = requests.post(url, data=data, files=files, timeout=60)
+            if response.status_code == 200 and "http" in response.text:
+                link = response.text.strip()
+                print(f"  [Catbox] 성공: {link}")
+                return link
+        except Exception as e:
+            print(f"  [Catbox] 시도 실패: {e}")
+
+    # 모든 재시도 끝에 실패한 경우
+    print(f"  [최종 실패] 5분 대기 후 재시도까지 모두 실패했습니다: {file_path}")
     return None
+
+    # 삭제됨: upload_to_litterbox (통합됨)
 
 def update_last_upload(date_str):
     with open("last_upload.txt", "w") as f:
@@ -273,7 +295,7 @@ def update_last_upload(date_str):
 
 def post_to_instagram_reels(video_path, caption, date_str):
     print(f"인스타그램 릴스 업로드 시작: {video_path}")
-    video_url = upload_to_litterbox(video_path)
+    video_url = upload_to_catbox(video_path)
     if not video_url: return False
 
     res = requests.post(f"https://graph.facebook.com/v18.0/{INSTAGRAM_ACCOUNT_ID}/media", data={
@@ -339,7 +361,7 @@ def main():
         return
 
     # 오전 7시~10시 사이에만 실행
-    if not (7 <= kst_now.hour < 10):
+    if not (6 <= kst_now.hour < 10):
         print(f"현재 KST {kst_now.hour}시: 오전 7시~10시 사이에만 실행됩니다. 실행 중단.")
         return
 
@@ -430,7 +452,7 @@ def main():
         # 4. 피드 포스팅
         public_urls = []
         for p in image_paths:
-            u = upload_image(p) # imgDB 대신 바로 Litterbox 사용 시도
+            u = upload_to_catbox(p)
             if u: public_urls.append(u)
         
         if len(public_urls) == len(image_paths):
