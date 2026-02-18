@@ -87,22 +87,31 @@ def fetch_and_translate_ohaasa():
     prompt = f"Translate the following JSON list into natural Korean. Maintain the 'rank' and 'st' fields. Translate 'content' and 'luck' only. Return ONLY the JSON: {json.dumps(items_to_translate, ensure_ascii=False)}"
     translated_list = None
 
-    # 1. Fleetune Ollama 우선 시도
-    try:
-        print("Fleetune Ollama(gpt-oss:120b) 번역 요청 중...")
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {FLEETUNE_API_KEY}"}
-        payload = {"model": "gpt-oss:120b", "messages": [{"role": "user", "content": prompt}]}
-        res = requests.post(FLEETUNE_API_URL, headers=headers, json=payload, timeout=90)
-        res.raise_for_status()
-        raw_text = res.json().get("choices", [{}])[0].get("message", {}).get("content", "")
-        translated_text = re.sub(r"```json|```", "", raw_text).strip()
+    # 1. Fleetune Ollama 우선 시도 (GitHub Actions 등에서 타임아웃 시 재시도)
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {FLEETUNE_API_KEY}"}
+    payload = {"model": "gpt-oss:120b", "messages": [{"role": "user", "content": prompt}]}
+    for attempt in range(3):
         try:
-            translated_list = json.loads(translated_text)
-        except:
-            match = re.search(r"(\[.*\])", translated_text, re.DOTALL)
-            translated_list = json.loads(match.group(1)) if match else None
-    except Exception as e:
-        print(f"Fleetune Ollama 번역 실패, Gemini로 대체: {e}")
+            print(f"Fleetune Ollama(gpt-oss:120b) 번역 요청 중... ({attempt + 1}/3)")
+            res = requests.post(FLEETUNE_API_URL, headers=headers, json=payload, timeout=120)
+            res.raise_for_status()
+            raw_text = res.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+            translated_text = re.sub(r"```json|```", "", raw_text).strip()
+            try:
+                translated_list = json.loads(translated_text)
+            except:
+                match = re.search(r"(\[.*\])", translated_text, re.DOTALL)
+                translated_list = json.loads(match.group(1)) if match else None
+            if translated_list:
+                break
+        except Exception as e:
+            print(f"Fleetune Ollama 시도 {attempt + 1} 실패: {e}")
+            if attempt < 2:
+                wait_sec = 15
+                print(f"  {wait_sec}초 후 재시도...")
+                time.sleep(wait_sec)
+            else:
+                print("Fleetune Ollama 최종 실패, Gemini로 대체합니다.")
 
     # 2. Gemini 대체
     if not translated_list:
@@ -378,7 +387,7 @@ def post_to_instagram(image_urls, caption, date_str):
 # ==========================================
 def main():
 
-    kst_now = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
+    kst_now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=9)
     today_str = kst_now.strftime("%Y%m%d")
 
     # last_upload.txt 날짜와 오늘이 같으면 실행 막기
@@ -391,7 +400,7 @@ def main():
         return
 
     # 오전 7시~10시 사이에만 실행
-    if not (0 <= kst_now.hour < 20):
+    if not (7 <= kst_now.hour < 10):
         print(f"현재 KST {kst_now.hour}시: 오전 7시~10시 사이에만 실행됩니다. 실행 중단.")
         return
 

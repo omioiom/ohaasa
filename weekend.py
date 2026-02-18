@@ -172,16 +172,31 @@ def fetch_and_translate_ohaasa():
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {FLEETUNE_API_KEY}"}
         payload = {"model": MODEL_NAME, "messages": [{"role": "user", "content": prompt}]}
 
+        translated_list = []
         try:
-            resp = requests.post(FLEETUNE_API_URL, headers=headers, json=payload, timeout=90)
-            resp.raise_for_status()
-            raw_text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
-            json_str = re.sub(r"```json|```", "", raw_text).strip()
-            try:
-                translated_list = json.loads(json_str)
-            except:
-                match = re.search(r"(\[.*\])", json_str, re.DOTALL)
-                translated_list = json.loads(match.group(1)) if match else []
+            last_err = None
+            for attempt in range(3):
+                try:
+                    print(f"AI 서버({MODEL_NAME}) 번역 요청 중... ({attempt + 1}/3)")
+                    resp = requests.post(FLEETUNE_API_URL, headers=headers, json=payload, timeout=120)
+                    resp.raise_for_status()
+                    raw_text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+                    json_str = re.sub(r"```json|```", "", raw_text).strip()
+                    try:
+                        translated_list = json.loads(json_str)
+                    except:
+                        match = re.search(r"(\[.*\])", json_str, re.DOTALL)
+                        translated_list = json.loads(match.group(1)) if match else []
+                    if translated_list:
+                        break
+                except Exception as e:
+                    last_err = e
+                    print(f"gpt-oss 시도 {attempt + 1} 실패: {e}")
+                    if attempt < 2:
+                        print("  15초 후 재시도...")
+                        time.sleep(15)
+            if not translated_list:
+                raise last_err or Exception("Fleetune 최종 실패")
         except Exception as e:
             print(f"gpt-oss 번역 실패, Gemini 2.5 Flash로 대체: {e}")
             gemini_prompt = [
@@ -604,7 +619,7 @@ def run_full_process(data):
 # ==========================================
 def main():
 
-    kst_now = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
+    kst_now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=9)
     today_str = kst_now.strftime("%Y%m%d")
 
     # 토/일만 실행
