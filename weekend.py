@@ -19,7 +19,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 # ==========================================
 INSTAGRAM_ACCESS_TOKEN = "EAAd6uwZBluwsBQraZBXkNCmgfib8ZB5gEPYOv5OIGuX1ZC6cSUTY5X2HI93XydyaEZCq99tjBuPURHOlc9DybydWoZCV7A8ZCeHuAWaI4lVnfRCximXPKF8VYmiGfgH0y5hGPV6tq28DoZCaZBHqsKuONZAy8CFD7D28JdnlkiGCKjb4uoOj8f0h372yqVezBv"
 INSTAGRAM_ACCOUNT_ID = "17841449814829956"
-IMGBB_API_KEY = "4b8f860f3d842b4f48a0d371fff6845d"
+IMGBB_API_KEY = "AIzaSyBWrE_pNqFezMqnn9-wBCLWQtmntABo9cI"
 
 # ==========================================
 # [공통] 매핑 테이블 및 디자인 설정
@@ -123,7 +123,8 @@ def upload_to_catbox(file_path):
 # ==========================================
 def fetch_and_translate_ohaasa():
     TV_ASAHI_URL = "https://www.tv-asahi.co.jp/goodmorning/uranai/index.html"
-    MODEL_SERVER_URL = "http://223.130.130.97:11434/api/generate"
+    FLEETUNE_API_URL = "https://ollama.fleetune.com/v1/chat/completions"
+    FLEETUNE_API_KEY = "fleetune-ollama-3821"
     MODEL_NAME = "gpt-oss:120b"
     GEMINI_API_KEY = "AIzaSyA2zmmUog9Ohd0XEiviwM2WS9PYPZjJDio"
     GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
@@ -168,13 +169,13 @@ def fetch_and_translate_ohaasa():
         print(f"AI 서버({MODEL_NAME}) 번역 요청 중...")
         prompt = f"""당신은 일본어 전문 번역가입니다. 아래 제공된 일본어 별자리 운세 JSON 데이터의 'content'와 'luck' 필드를 한국어로 자연스럽게 번역하세요.\n만약 content 에 부적절하거나 쓸모없는 이모지나 기호 같은 문자가 포함되어 있다면 이를 제거한 후 번역하세요. \n특히 'luck' 필드에 포함된 'ラッキーカラー(행운의 색)'는 '행운의 색: [색상]', '幸運의 카기(행운의 열쇠/아이템)'는 '행운의 아이템: [아이템]' 형식으로 번역하세요.\n결과는 반드시 부연 설명 없이 JSON 코드만 출력하세요.\n데이터: {json.dumps(items_to_translate, ensure_ascii=False)}"""
 
-        headers = {"Content-Type": "application/json"}
-        payload = {"model": MODEL_NAME, "prompt": prompt, "stream": False}
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {FLEETUNE_API_KEY}"}
+        payload = {"model": MODEL_NAME, "messages": [{"role": "user", "content": prompt}]}
 
         try:
-            resp = requests.post(MODEL_SERVER_URL, headers=headers, json=payload, timeout=90)
+            resp = requests.post(FLEETUNE_API_URL, headers=headers, json=payload, timeout=90)
             resp.raise_for_status()
-            raw_text = resp.json().get("response", "")
+            raw_text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
             json_str = re.sub(r"```json|```", "", raw_text).strip()
             try:
                 translated_list = json.loads(json_str)

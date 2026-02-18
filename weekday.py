@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 INSTAGRAM_ACCESS_TOKEN = "EAAd6uwZBluwsBQraZBXkNCmgfib8ZB5gEPYOv5OIGuX1ZC6cSUTY5X2HI93XydyaEZCq99tjBuPURHOlc9DybydWoZCV7A8ZCeHuAWaI4lVnfRCximXPKF8VYmiGfgH0y5hGPV6tq28DoZCaZBHqsKuONZAy8CFD7D28JdnlkiGCKjb4uoOj8f0h372yqVezBv"
 INSTAGRAM_ACCOUNT_ID = "17841449814829956"
 IMGBB_API_KEY = "4b8f860f3d842b4f48a0d371fff6845d"
-GEMINI_API_KEY = "AIzaSyA2zmmUog9Ohd0XEiviwM2WS9PYPZjJDio"
+GEMINI_API_KEY = "AIzaSyBWrE_pNqFezMqnn9-wBCLWQtmntABo9cI"
 
 # ==========================================
 # [공통] 매핑 테이블 및 디자인 설정 (기존 디자인 유지)
@@ -54,8 +54,11 @@ RANK_BRONZE  = (178, 136, 108)
 RANK_BASE    = (185, 177, 162)
 
 # ==========================================
-# [기능 1] 데이터 수집 및 Gemini 번역
+# [기능 1] 데이터 수집 및 번역 (Fleetune Ollama 우선 → Gemini 대체)
 # ==========================================
+FLEETUNE_API_URL = "https://ollama.fleetune.com/v1/chat/completions"
+FLEETUNE_API_KEY = "fleetune-ollama-3821"
+
 def fetch_and_translate_ohaasa():
     ASAHI_URL = "https://www.asahi.co.jp/data/ohaasa2020/horoscope.json"
     
@@ -81,17 +84,44 @@ def fetch_and_translate_ohaasa():
             "luck": luck_item_jp
         })
 
-    # Gemini 2.5-flash만 사용
     prompt = f"Translate the following JSON list into natural Korean. Maintain the 'rank' and 'st' fields. Translate 'content' and 'luck' only. Return ONLY the JSON: {json.dumps(items_to_translate, ensure_ascii=False)}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"response_mime_type": "application/json"}
-    }
-    print("Google Gemini(2.5-flash) 번역 요청 중...")
-    GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-    res = requests.post(GEMINI_URL, json=payload, timeout=60).json()
-    translated_text = res['candidates'][0]['content']['parts'][0]['text']
-    translated_list = json.loads(translated_text)
+    translated_list = None
+
+    # 1. Fleetune Ollama 우선 시도
+    try:
+        print("Fleetune Ollama(gpt-oss:120b) 번역 요청 중...")
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {FLEETUNE_API_KEY}"}
+        payload = {"model": "gpt-oss:120b", "messages": [{"role": "user", "content": prompt}]}
+        res = requests.post(FLEETUNE_API_URL, headers=headers, json=payload, timeout=90)
+        res.raise_for_status()
+        raw_text = res.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+        translated_text = re.sub(r"```json|```", "", raw_text).strip()
+        try:
+            translated_list = json.loads(translated_text)
+        except:
+            match = re.search(r"(\[.*\])", translated_text, re.DOTALL)
+            translated_list = json.loads(match.group(1)) if match else None
+    except Exception as e:
+        print(f"Fleetune Ollama 번역 실패, Gemini로 대체: {e}")
+
+    # 2. Gemini 대체
+    if not translated_list:
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"response_mime_type": "application/json"}
+        }
+        print("Google Gemini(2.5-flash) 번역 요청 중...")
+        GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+        res = requests.post(GEMINI_URL, json=payload, timeout=60).json()
+        if 'candidates' not in res:
+            print("[Gemini API 오류] 전체 응답:", json.dumps(res, ensure_ascii=False, indent=2))
+            raise Exception(f"Gemini API 응답에 'candidates' 키가 없습니다: {res}")
+        try:
+            translated_text = res['candidates'][0]['content']['parts'][0]['text']
+            translated_list = json.loads(translated_text)
+        except Exception as e:
+            print("[Gemini API 파싱 오류] 전체 응답:", json.dumps(res, ensure_ascii=False, indent=2))
+            raise e
     final_results = []
     for i, item in enumerate(translated_list):
         final_results.append({
@@ -361,7 +391,7 @@ def main():
         return
 
     # 오전 7시~10시 사이에만 실행
-    if not (6 <= kst_now.hour < 10):
+    if not (0 <= kst_now.hour < 20):
         print(f"현재 KST {kst_now.hour}시: 오전 7시~10시 사이에만 실행됩니다. 실행 중단.")
         return
 
@@ -429,7 +459,7 @@ def main():
             import cv2
             import subprocess
             import glob
-            video_path = os.path.join(output_dir, f"ohaasa_{today_str}.mp4")
+            video_path = os.path.join(output_dir, "ohaasa.mp4")
             first_img = cv2.imread(image_paths[0])
             h, w, _ = first_img.shape
             out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), 24, (w, h))
@@ -442,7 +472,7 @@ def main():
             mp3_files = glob.glob(os.path.join("asset", "mp3", "m*.mp3"))
             if mp3_files:
                 bgm_path = random.choice(mp3_files)
-                video_bgm = os.path.join(output_dir, f"ohaasa_{today_str}_bgm.mp4")
+                video_bgm = os.path.join(output_dir, "ohaasa_bgm.mp4")
                 subprocess.run(["ffmpeg", "-y", "-i", video_path, "-i", bgm_path, "-c:v", "copy", "-c:a", "aac", "-shortest", video_bgm], check=True)
                 video_final = video_bgm
 
