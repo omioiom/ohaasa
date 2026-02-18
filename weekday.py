@@ -400,7 +400,7 @@ def main():
         return
 
     # 오전 7시~10시 사이에만 실행
-    if not (0 <= kst_now.hour < 10):
+    if not (7 <= kst_now.hour < 10):
         print(f"현재 KST {kst_now.hour}시: 오전 7시~10시 사이에만 실행됩니다. 실행 중단.")
         return
 
